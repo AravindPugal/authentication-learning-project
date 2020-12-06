@@ -2,15 +2,25 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const ejs = require("ejs");
 const mongoose = require("mongoose");
-const bcrypt = require("bcrypt");
+const session = require("express-session");
+const passport = require("passport");
+const passportLocalMongoose = require("passport-local-mongoose");
 const app = express();
 app.use(express.static("public"));
 app.use(bodyParser.urlencoded({extended:true}));
+app.use(session({
+    secret:"some secret",
+    resave:false,
+    saveUninitialized:false
+}));
+app.use(passport.initialize());
+app.use(passport.session());
 app.set("views","views");
 app.set("view engine","ejs");
 
 // database setup
 mongoose.connect("mongodb://localhost:27017/userDB",{useNewUrlParser:true,useUnifiedTopology:true});
+mongoose.set('useCreateIndex', true);
 const db = mongoose.connection;
 db.on("open",()=>{
     console.log("successfully connected to the database");
@@ -20,10 +30,12 @@ const userSchema = new mongoose.Schema({
     email : String,
     password : String
 });
+userSchema.plugin(passportLocalMongoose);
 
 const User = mongoose.model("User",userSchema);
-
-
+passport.use(User.createStrategy());
+passport.serializeUser(User.serializeUser());
+passport.deserializeUser(User.deserializeUser());
 // request hadlers
 app.get("/",(req,res)=>{
     res.render("home");
@@ -32,47 +44,43 @@ app.get("/register",(req,res)=>{
     res.render("register");
 });
 app.post("/register",(req,res)=>{
-    bcrypt.hash(req.body.password,10,(err,hashed)=>{
-        if (!err) {
-            const newUser = new User({
-            email:req.body.username,
-            password:hashed
+    User.register({username:req.body.username},req.body.password,(err,user)=>{
+        if(!err){
+            passport.authenticate("local")(req,res,()=>{
+                res.redirect("/secrets");
             });
-            newUser.save((err)=>{
-                if(!err){
-                    res.render("secrets");
-                }else{
-                    console.log(err);
-                }
-            });
-        } else {
+        }else{
             console.log(err);
         }
     });
+    
 });
 app.get("/login",(req,res)=>{
     res.render("login");
 });
 app.post("/login",(req,res)=>{
-    const email = req.body.username;
-    const password = req.body.password;
-    User.findOne({email:email},(err,match)=>{
+    const user = new User({
+        username:req.body.username,
+        password:req.body.password
+    });
+    req.login(user,(err)=>{
         if(!err){
-            if(match){
-                bcrypt.compare(password,match.password,(err,passwordMatch)=>{
-                    if (passwordMatch){
-                        res.render("secrets");
-                    }else{
-                        console.log("incorrect password");
-                    }
-                });
-            }else{
-                console.log("account not found");
-            }
+            User.authenticate("local")(req,res,()=>{res.redirect("/secrets")});
         }else{
             console.log(err);
         }
-    });
+    }); 
+});
+app.get("/logout",(req,res)=>{
+    req.logout();
+    res.redirect("/");
+});
+app.get("/secrets",(req,res)=>{
+    if(req.isAuthenticated()){
+        res.render("secrets");
+    }else{
+        res.redirect("/login");
+    }
 });
 
 
